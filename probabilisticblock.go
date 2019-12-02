@@ -13,18 +13,22 @@ import (
 
 // ProbabilisticBlock represents a block designed for the Probabilistic Validity Rule.
 type ProbabilisticBlock struct {
-	prevHash           []byte
-	messages           []Message
-	rowRoots           [][]byte
-	columnRoots        [][]byte
-	cachedRowRoots     [][]byte
-	cachedColumnRoots  [][]byte
-	squareWidth        int
-	headerOnly         bool
-	cachedEds          *rsmt2d.ExtendedDataSquare
-	messageSize        int
-	validated          bool
-	sampleRequest      *SampleRequest
+	prevHash    []byte
+	messages    []Message
+	messageSize int
+
+	headerOnly bool
+	validated  bool
+
+	// This replaces the simple single merkle root:
+	cachedRowRoots    [][]byte
+	cachedColumnRoots [][]byte
+	squareWidth       int
+	cachedEds         *rsmt2d.ExtendedDataSquare
+
+	// This probably should not be part of the block
+	sampleRequest *SampleRequest
+
 	provenDependencies map[string]bool
 }
 
@@ -38,7 +42,7 @@ type SampleResponse struct {
 }
 
 // NewProbabilisticBlock returns a new probabilistic block.
-func NewProbabilisticBlock(prevHash []byte, messageSize int) Block {
+func NewProbabilisticBlock(prevHash []byte, messageSize int) *ProbabilisticBlock {
 	return &ProbabilisticBlock{
 		prevHash:           prevHash,
 		messageSize:        messageSize,
@@ -50,8 +54,8 @@ func NewProbabilisticBlock(prevHash []byte, messageSize int) Block {
 func ImportProbabilisticBlockHeader(prevHash []byte, rowRoots [][]byte, columnRoots [][]byte, squareWidth int, messageSize int, validated bool) Block {
 	return &ProbabilisticBlock{
 		prevHash:           prevHash,
-		rowRoots:           rowRoots,
-		columnRoots:        columnRoots,
+		cachedRowRoots:     rowRoots,
+		cachedColumnRoots:  columnRoots,
 		squareWidth:        squareWidth,
 		headerOnly:         true,
 		messageSize:        messageSize,
@@ -117,10 +121,6 @@ func (pb *ProbabilisticBlock) eds() *rsmt2d.ExtendedDataSquare {
 
 // RowRoots returns the Merkle roots of the rows of the block.
 func (pb *ProbabilisticBlock) RowRoots() [][]byte {
-	if pb.rowRoots != nil {
-		return pb.rowRoots
-	}
-
 	if pb.cachedRowRoots == nil {
 		pb.computeRoots()
 	}
@@ -130,10 +130,6 @@ func (pb *ProbabilisticBlock) RowRoots() [][]byte {
 
 // ColumnRoots returns the Merkle roots of the columns of the block.
 func (pb *ProbabilisticBlock) ColumnRoots() [][]byte {
-	if pb.columnRoots != nil {
-		return pb.columnRoots
-	}
-
 	if pb.cachedColumnRoots == nil {
 		pb.computeRoots()
 	}
@@ -146,18 +142,14 @@ func (pb *ProbabilisticBlock) computeRoots() {
 	fh := NewFlagHasher(ndf, sha256.New())
 	rowRoots := make([][]byte, pb.SquareWidth())
 	columnRoots := make([][]byte, pb.SquareWidth())
-	var rowTree *merkletree.Tree
-	var columnTree *merkletree.Tree
-	var rowData [][]byte
-	var columnData [][]byte
 	for i := 0; i < pb.SquareWidth(); i++ {
 		if i >= pb.SquareWidth()/2 {
 			fh.(*flagDigest).setCodedMode(true)
 		}
-		rowTree = merkletree.New(fh)
-		columnTree = merkletree.New(fh)
-		rowData = pb.eds().Row(uint(i))
-		columnData = pb.eds().Column(uint(i))
+		rowTree := merkletree.New(fh)
+		columnTree := merkletree.New(fh)
+		rowData := pb.eds().Row(uint(i))
+		columnData := pb.eds().Column(uint(i))
 		for j := 0; j < pb.SquareWidth(); j++ {
 			if j >= pb.SquareWidth()/2 {
 				fh.(*flagDigest).setCodedMode(true)
@@ -272,10 +264,10 @@ func (pb *ProbabilisticBlock) ProcessSamplesResponse(response *SampleResponse) b
 func (pb *ProbabilisticBlock) Digest() []byte {
 	hasher := sha256.New()
 	hasher.Write(pb.prevHash)
-	for _, root := range pb.rowRoots {
+	for _, root := range pb.cachedRowRoots {
 		hasher.Write(root)
 	}
-	for _, root := range pb.columnRoots {
+	for _, root := range pb.cachedColumnRoots {
 		hasher.Write(root)
 	}
 	return hasher.Sum(nil)
@@ -310,44 +302,40 @@ func (pb *ProbabilisticBlock) shareIndexToCoordinates(index int) (row, column in
 
 // ApplicationProof creates a Merkle proof for all of the messages in a block for an application namespace.
 // All proofs are created from row roots only.
-func (pb *ProbabilisticBlock) ApplicationProof(namespace [namespaceSize]byte) (int, int, [][][]byte, *[]Message, [][]byte) {
-	var proofStart int
-	var proofEnd int
+func (pb *ProbabilisticBlock) ApplicationProof(namespace [namespaceSize]byte) (
+	proofStart int,
+	proofEnd int,
+	proofs [][][]byte,
+	messages *[]Message,
+	hashes [][]byte,
+) {
 	var found bool
+	var inRange bool
+	var prevMessage Message
 	for index, message := range pb.messages {
-		if message.Namespace() == namespace {
+		currentNs := message.Namespace()
+		if bytes.Equal(currentNs[:], namespace[:]) {
 			if !found {
 				found = true
 				proofStart = index
 			}
-			proofEnd = index + 1
-		}
-	}
-
-	var inRange bool
-	if !found {
-		var prevMessage Message
-		// We need to generate a proof for an absence of relevant messages.
-		for index, message := range pb.messages {
-			if index != 0 {
-				prevNs := prevMessage.Namespace()
-				currentNs := message.Namespace()
-				if (bytes.Compare(prevNs[:], namespace[:]) < 0 && bytes.Compare(namespace[:], currentNs[:]) < 0) ||
-					(bytes.Compare(prevNs[:], namespace[:]) > 0 && bytes.Compare(namespace[:], currentNs[:]) > 0) {
-					if !inRange {
-						inRange = true
-						proofStart = index
-					}
-					proofEnd = index + 1
+		} else if index != 0 {
+			prevNs := prevMessage.Namespace()
+			// We need to generate a proof for an absence of relevant messages.
+			if (bytes.Compare(prevNs[:], namespace[:]) < 0 && bytes.Compare(namespace[:], currentNs[:]) < 0) ||
+				(bytes.Compare(prevNs[:], namespace[:]) > 0 && bytes.Compare(namespace[:], currentNs[:]) > 0) {
+				if !inRange {
+					inRange = true
+					proofStart = index
 				}
 			}
-			prevMessage = message
 		}
+		proofEnd = index + 1
+		prevMessage = message
 	}
 
 	ndf := NewNamespaceDummyFlagger()
 	fh := NewFlagHasher(ndf, sha256.New())
-	var proofs [][][]byte
 	if found || inRange {
 		proofStartRow, proofStartColumn := pb.indexToCoordinates(proofStart)
 		proofEndRow, proofEndColumn := pb.indexToCoordinates(proofEnd)
@@ -376,19 +364,21 @@ func (pb *ProbabilisticBlock) ApplicationProof(namespace [namespaceSize]byte) (i
 		}
 	}
 	proofMessages := pb.messages[proofStart:proofEnd]
+	messages = &proofMessages
 	if found {
-		return proofStart, proofEnd, proofs, &proofMessages, nil
+		// return with the actually included messages
+		return
 	}
 
-	var hashes [][]byte
+	// compute the hashes for proof of absence and return those instead of the messages
 	for _, message := range proofMessages {
 		ndf := NewNamespaceDummyFlagger()
 		fh := NewFlagHasher(ndf, sha256.New())
 		hashes = append(hashes, leafSum(fh, message.MarshalPadded(pb.messageSize)))
 		fh.Reset()
 	}
-
-	return proofStart, proofEnd, proofs, nil, hashes
+	messages = nil
+	return
 }
 
 // VerifyApplicationProof verifies a Merkle proof for all of the messages in a block for an application namespace.

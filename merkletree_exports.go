@@ -1,8 +1,8 @@
 package lazyledger
 
 import (
-    "hash"
-    "math/bits"
+	"hash"
+	"math/bits"
 )
 
 // sum returns the hash of the input data using the specified algorithm.

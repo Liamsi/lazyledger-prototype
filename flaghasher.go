@@ -69,8 +69,5 @@ func (d *flagDigest) mainData() []byte {
 }
 
 func (d *flagDigest) isLeaf() bool {
-	if d.data[0] == byte(0) {
-		return true
-	}
-	return false
+	return d.data[0] == byte(0)
 }

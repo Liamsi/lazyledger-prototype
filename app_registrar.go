@@ -96,7 +96,7 @@ func (app *Registrar) Balance(key []byte) uint64 {
 }
 
 func (app *Registrar) transferCallback(from []byte, to []byte, value int) {
-	if bytes.Compare(app.owner, to) == 0 {
+	if bytes.Equal(app.owner, to) {
 		balanceBytes, err := app.state.Get(append([]byte("balance__"), from...))
 		var balance uint64
 		if err != nil {

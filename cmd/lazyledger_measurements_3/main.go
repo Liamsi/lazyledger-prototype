@@ -102,5 +102,5 @@ func generateProbabilisticBlock(currencyTxes int, otherTxes, txSize int) (*lazyl
 
 	b.ProcessBlock(pb)
 
-	return pb.(*lazyledger.ProbabilisticBlock), app, app2
+	return pb, app, app2
 }

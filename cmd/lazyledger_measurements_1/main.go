@@ -59,5 +59,5 @@ func generateProbabilisticBlock(txes int, txSize int) *lazyledger.ProbabilisticB
 		pb.AddMessage(*lazyledger.NewMessage([namespaceSize]byte{0}, messageData))
 	}
 
-	return pb.(*lazyledger.ProbabilisticBlock)
+	return pb
 }

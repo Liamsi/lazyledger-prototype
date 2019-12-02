@@ -143,5 +143,5 @@ func generateProbabilisticBlock(registrarTxes int, otherTxes, txSize int) (*lazy
 		pb.AddMessage(currencyApp.GenerateTransaction(privA, pubB, 1, nil))
 	}
 
-	return pb.(*lazyledger.ProbabilisticBlock), currencyApp.Namespace(), registrarApp.Namespace()
+	return pb, currencyApp.Namespace(), registrarApp.Namespace()
 }

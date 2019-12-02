@@ -110,5 +110,5 @@ func generateProbabilisticBlock(currencyTxes int, otherTxes, txSize int) (*lazyl
 		pb.AddMessage(*lazyledger.NewMessage([namespaceSize]byte{0}, messageData))
 	}
 
-	return pb.(*lazyledger.ProbabilisticBlock), app.Namespace()
+	return pb, app.Namespace()
 }
